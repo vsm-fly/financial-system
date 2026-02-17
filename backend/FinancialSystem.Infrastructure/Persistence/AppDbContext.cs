@@ -39,6 +39,23 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<CashShift>()
             .HasIndex(x => new { x.CashBoxId, x.Status });
 
+        // ✅ DB-level защита от двойного проведения:
+        // один и тот же документ не может создать две одинаковые проводки
+        modelBuilder.Entity<LedgerEntry>()
+            .HasIndex(x => new
+            {
+                x.SourceDocType,
+                x.SourceDocId,
+                x.MoneyLocationType,
+                x.MoneyLocationId,
+                x.Direction
+            })
+            .IsUnique();
+
+        // (опционально) ускоряет отчеты/реестры
+        modelBuilder.Entity<LedgerEntry>()
+            .HasIndex(x => x.PostedAt);
+
         base.OnModelCreating(modelBuilder);
     }
 }

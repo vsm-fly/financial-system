@@ -177,12 +177,14 @@ public class CashService
     // POST STANDARD OPERATION
     // =========================
 
-    public async Task<LedgerEntry> PostOperationAsync(Guid operationId, Guid userId,
-        Direction? overrideDirection = null, bool isRefund = false)
+    public async Task<LedgerEntry> PostOperationAsync(
+        Guid operationId,
+        Guid userId,
+        Direction? overrideDirection = null,
+        bool isRefund = false)
     {
         var op = await _db.CashOperations.FirstOrDefaultAsync(o => o.Id == operationId);
         if (op is null) throw new InvalidOperationException("Операция не найдена.");
-        if (op.Status != DocumentStatus.Draft) throw new InvalidOperationException("Провести можно только черновик.");
 
         var direction = op.Type switch
         {
@@ -192,6 +194,33 @@ public class CashService
             _ => overrideDirection ?? throw new InvalidOperationException("Для этого типа операции нужно указать направление.")
         };
 
+        var sourceDocType = "CashOperation";
+        var sourceDocId = op.Id.ToString();
+
+        // 1) Идемпотентность: если проводка уже есть — вернуть её
+        var existing = await _db.LedgerEntries.FirstOrDefaultAsync(e =>
+            e.SourceDocType == sourceDocType &&
+            e.SourceDocId == sourceDocId &&
+            e.MoneyLocationType == MoneyLocationType.CashBox &&
+            e.MoneyLocationId == op.CashBoxId &&
+            e.Direction == direction);
+
+        if (existing is not null)
+        {
+            // На всякий случай синхронизируем статус документа
+            if (op.Status != DocumentStatus.Posted)
+            {
+                op.Status = DocumentStatus.Posted;
+                op.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+            }
+
+            return existing;
+        }
+
+        if (op.Status != DocumentStatus.Draft)
+            throw new InvalidOperationException("Провести можно только черновик.");
+
         if (_rules.DisallowNegativeCash && direction == Direction.Out)
         {
             var current = await GetCashBalanceBaseAsync(op.CashBoxId);
@@ -199,9 +228,11 @@ public class CashService
                 throw new InvalidOperationException($"Недостаточно средств в кассе. Остаток={current}, нужно={op.AmountBase}.");
         }
 
+        var now = DateTime.UtcNow;
+
         var entry = new LedgerEntry
         {
-            PostedAt = DateTime.UtcNow,
+            PostedAt = now,
             Direction = direction,
             Amount = op.Amount,
             CurrencyCode = op.CurrencyCode,
@@ -212,15 +243,15 @@ public class CashService
             CashflowItemId = op.CashflowItemId,
             CounterpartyId = op.CounterpartyId,
             IsRefund = op.Type == CashOperationType.Refund || isRefund,
-            SourceDocType = "CashOperation",
-            SourceDocId = op.Id.ToString(),
+            SourceDocType = sourceDocType,
+            SourceDocId = sourceDocId,
             Comment = op.Comment
         };
 
         _db.LedgerEntries.Add(entry);
 
         op.Status = DocumentStatus.Posted;
-        op.UpdatedAt = DateTime.UtcNow;
+        op.UpdatedAt = now;
 
         await _db.SaveChangesAsync();
         return entry;
@@ -234,11 +265,43 @@ public class CashService
     {
         var op = await _db.CashOperations.FirstOrDefaultAsync(o => o.Id == operationId);
         if (op is null) throw new InvalidOperationException("Операция не найдена.");
-        if (op.Status != DocumentStatus.Draft) throw new InvalidOperationException("Провести можно только черновик.");
         if (op.Type != CashOperationType.Collection) throw new InvalidOperationException("Это не инкассация.");
 
         if (op.RelatedBankAccountId is null)
             throw new InvalidOperationException("Не указан BankAccountId.");
+
+        var sourceDocType = "CashOperation";
+        var sourceDocId = op.Id.ToString();
+
+        // 1) Идемпотентность: если обе проводки уже есть — вернуть их
+        var existingCash = await _db.LedgerEntries.FirstOrDefaultAsync(e =>
+            e.SourceDocType == sourceDocType &&
+            e.SourceDocId == sourceDocId &&
+            e.MoneyLocationType == MoneyLocationType.CashBox &&
+            e.MoneyLocationId == op.CashBoxId &&
+            e.Direction == Direction.Out);
+
+        var existingBank = await _db.LedgerEntries.FirstOrDefaultAsync(e =>
+            e.SourceDocType == sourceDocType &&
+            e.SourceDocId == sourceDocId &&
+            e.MoneyLocationType == MoneyLocationType.BankAccount &&
+            e.MoneyLocationId == op.RelatedBankAccountId.Value &&
+            e.Direction == Direction.In);
+
+        if (existingCash is not null && existingBank is not null)
+        {
+            if (op.Status != DocumentStatus.Posted)
+            {
+                op.Status = DocumentStatus.Posted;
+                op.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+            }
+
+            return (existingCash, existingBank);
+        }
+
+        if (op.Status != DocumentStatus.Draft)
+            throw new InvalidOperationException("Провести можно только черновик.");
 
         if (_rules.DisallowNegativeCash)
         {
@@ -249,7 +312,7 @@ public class CashService
 
         var now = DateTime.UtcNow;
 
-        var cashEntry = new LedgerEntry
+        var cashEntry = existingCash ?? new LedgerEntry
         {
             PostedAt = now,
             Direction = Direction.Out,
@@ -261,12 +324,12 @@ public class CashService
             MoneyLocationId = op.CashBoxId,
             CashflowItemId = op.CashflowItemId,
             CounterpartyId = op.CounterpartyId,
-            SourceDocType = "CashOperation",
-            SourceDocId = op.Id.ToString(),
+            SourceDocType = sourceDocType,
+            SourceDocId = sourceDocId,
             Comment = op.Comment
         };
 
-        var bankEntry = new LedgerEntry
+        var bankEntry = existingBank ?? new LedgerEntry
         {
             PostedAt = now,
             Direction = Direction.In,
@@ -278,12 +341,13 @@ public class CashService
             MoneyLocationId = op.RelatedBankAccountId.Value,
             CashflowItemId = op.CashflowItemId,
             CounterpartyId = op.CounterpartyId,
-            SourceDocType = "CashOperation",
-            SourceDocId = op.Id.ToString(),
+            SourceDocType = sourceDocType,
+            SourceDocId = sourceDocId,
             Comment = op.Comment
         };
 
-        _db.LedgerEntries.AddRange(cashEntry, bankEntry);
+        if (existingCash is null) _db.LedgerEntries.Add(cashEntry);
+        if (existingBank is null) _db.LedgerEntries.Add(bankEntry);
 
         op.Status = DocumentStatus.Posted;
         op.UpdatedAt = now;

@@ -15,7 +15,9 @@ public class CashBox : Entity
 
     public Guid? LegalEntityId { get; set; }
 
-    // SINGLE/MULTI
+    /// <summary>
+    /// SINGLE / MULTI
+    /// </summary>
     public string CurrencyMode { get; set; } = CashConstants.CurrencyModeSingle;
 
     public bool IsActive { get; set; } = true;
@@ -34,7 +36,9 @@ public class CashShift : Entity
     public decimal? ClosingBalanceDeclared { get; set; }
     public decimal? ClosingBalanceCalculated { get; set; }
 
-    // OPEN/CLOSED
+    /// <summary>
+    /// OPEN / CLOSED
+    /// </summary>
     public string Status { get; set; } = CashConstants.ShiftStatusOpen;
 }
 
@@ -51,23 +55,28 @@ public class CashOperation : Entity
 {
     public Guid CashBoxId { get; set; }
 
-    // Может быть null для операций "вне смены" (если решишь разрешать).
-    // Если НЕ нужно — убери nullable и валидацию делай жесткой.
+    /// <summary>
+    /// Может быть null для операций "вне смены" (если решишь разрешать).
+    /// </summary>
     public Guid? ShiftId { get; set; }
 
     public CashOperationType Type { get; set; }
 
-    // Сумма в валюте операции (CurrencyCode)
+    /// <summary>
+    /// Сумма в валюте операции (CurrencyCode)
+    /// </summary>
     public decimal Amount { get; set; }
 
     public required string CurrencyCode { get; set; }
 
-    // Курс к базовой валюте (если CurrencyMode SINGLE — всегда 1)
+    /// <summary>
+    /// Курс к базовой валюте (если CurrencyMode SINGLE — обычно 1)
+    /// </summary>
     public decimal FxRate { get; set; } = 1m;
 
-    // Сумма в базовой валюте.
-    // ВАЖНО: лучше вычислять (Amount * FxRate) в сервисе перед сохранением,
-    // чтобы не было рассинхрона.
+    /// <summary>
+    /// Сумма в базовой валюте (Amount * FxRate, округление — в сервисе)
+    /// </summary>
     public decimal AmountBase { get; set; }
 
     public Guid CashflowItemId { get; set; }
@@ -75,7 +84,10 @@ public class CashOperation : Entity
     public Guid? CounterpartyId { get; set; }
     public Guid? RelatedSaleId { get; set; }
 
-    // Например: для Collection (инкассация в банк) или Transfer (перемещение на банк/между кассами)
+    /// <summary>
+    /// Для Collection (инкасация касса -> банк).
+    /// Для Transfer между кассами лучше позже добавить отдельное поле RelatedCashBoxId (пока не реализовано).
+    /// </summary>
     public Guid? RelatedBankAccountId { get; set; }
 
     public DocumentStatus Status { get; set; } = DocumentStatus.Draft;
