@@ -221,7 +221,9 @@ app.MapPost("/cash/operations", async (CreateCashOperationRequest req, ClaimsPri
             fxRate: req.FxRate,
             cashflowItemId: req.CashflowItemId,
             counterpartyId: req.CounterpartyId,
-            comment: req.Comment);
+            relatedBankAccountId: req.RelatedBankAccountId, // ✅ FIX: прокидываем банк для инкассации
+            comment: req.Comment
+        );
 
         return Results.Ok(op);
     }
@@ -240,6 +242,23 @@ app.MapPost("/cash/operations/{id:guid}/post", async (Guid id, PostCashOperation
     {
         var entry = await cash.PostOperationAsync(id, uid, req.Direction, req.IsRefund);
         return Results.Ok(entry);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+}).RequireAuthorization();
+
+// ✅ NEW: проведение инкассации (Cash -> Bank) с 2 проводками
+app.MapPost("/cash/operations/{id:guid}/post-collection", async (Guid id, ClaimsPrincipal user, CashService cash) =>
+{
+    var uid = GetUserId(user);
+    if (uid == Guid.Empty) return Results.Unauthorized();
+
+    try
+    {
+        var (cashEntry, bankEntry) = await cash.PostCollectionAsync(id, uid);
+        return Results.Ok(new { cashEntry, bankEntry });
     }
     catch (Exception ex)
     {

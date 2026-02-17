@@ -15,8 +15,10 @@ public record CreateCashOperationRequest(
     decimal FxRate,
     Guid CashflowItemId,
     Guid? CounterpartyId,
-    string? Comment
+    string? Comment,
+    Guid? RelatedBankAccountId // для Collection (инкасация: касса -> банк)
 );
 
-// Для Refund/Transfer/Collection можно указать направление явно
-public record PostCashOperationRequest(Direction? Direction, bool IsRefund = false);
+// Для Refund можно явно указать направление (In/Out).
+// Для остальных типов направление не требуется (Income/Expense определяются автоматически).
+public record PostCashOperationRequest(Direction? Direction = null, bool IsRefund = false);
