@@ -1,0 +1,21 @@
+# .NET build
+**/bin/
+**/obj/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Env
+.env
+
+# Docker volumes
+postgres_data/
+data/
+
+# OS trash
+Thumbs.db
+.DS_Store

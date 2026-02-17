@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fs_db
+    environment:
+      POSTGRES_DB: financial_system
+      POSTGRES_USER: fs_user
+      POSTGRES_PASSWORD: fs_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - fs_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fs_user -d financial_system"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: FinancialSystem.Api/Dockerfile
+    container_name: fs_api
+    environment:
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Default: Host=db;Port=5432;Database=financial_system;Username=fs_user;Password=fs_pass
+      Jwt__Issuer: FinancialSystem
+      Jwt__Audience: FinancialSystem
+      Jwt__Key: super-dev-only-change-me-please-32chars
+      Seed__AdminEmail: admin@local
+      Seed__AdminPassword: Admin123!
+      Rules__DisallowNegativeCash: "true"
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  fs_pgdata:

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FinancialSystem.Domain\FinancialSystem.Domain.csproj" />
+    <ProjectReference Include="..\FinancialSystem.Infrastructure\FinancialSystem.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>
