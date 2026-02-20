@@ -16,6 +16,24 @@ static Guid GetUserId(ClaimsPrincipal user)
     return uid is null ? Guid.Empty : Guid.Parse(uid);
 }
 
+static bool IsCashier(ClaimsPrincipal user) =>
+    user.Claims.Any(c => c.Type == ClaimTypes.Role && c.Value == "CASHIER");
+
+static async Task<Guid> GetCashierCashBoxIdAsync(AppDbContext db, Guid userId)
+{
+    var u = await db.Users.FirstOrDefaultAsync(x => x.Id == userId && x.IsActive);
+    if (u is null) throw new InvalidOperationException("Пользователь не найден или не активен.");
+    if (u.CashBoxId is null) throw new InvalidOperationException("Кассиру не назначена касса.");
+    return u.CashBoxId.Value;
+}
+
+static async Task EnsureCashierShiftAccessAsync(AppDbContext db, Guid cashierCashBoxId, Guid shiftId)
+{
+    var shift = await db.CashShifts.AsNoTracking().FirstOrDefaultAsync(s => s.Id == shiftId);
+    if (shift is null) throw new InvalidOperationException("Смена не найдена.");
+    if (shift.CashBoxId != cashierCashBoxId) throw new InvalidOperationException("Нет доступа к этой смене.");
+}
+
 var builder = WebApplication.CreateBuilder(args);
 
 // JWT options from env
@@ -172,14 +190,19 @@ app.MapGet("/ledger", async (AppDbContext db) =>
 //
 // CASH v1 endpoints
 //
-app.MapPost("/cash/shifts/open", async (OpenShiftRequest req, ClaimsPrincipal user, CashService cash) =>
+
+app.MapPost("/cash/shifts/open", async (OpenShiftRequest req, ClaimsPrincipal user, AppDbContext db, CashService cash) =>
 {
     var uid = GetUserId(user);
     if (uid == Guid.Empty) return Results.Unauthorized();
 
     try
     {
-        var shift = await cash.OpenShiftAsync(req.CashBoxId, uid, req.OpeningBalanceDeclared);
+        var cashBoxId = IsCashier(user)
+            ? await GetCashierCashBoxIdAsync(db, uid)
+            : req.CashBoxId;
+
+        var shift = await cash.OpenShiftAsync(cashBoxId, uid, req.OpeningBalanceDeclared);
         return Results.Ok(shift);
     }
     catch (Exception ex)
@@ -188,13 +211,19 @@ app.MapPost("/cash/shifts/open", async (OpenShiftRequest req, ClaimsPrincipal us
     }
 }).RequireAuthorization();
 
-app.MapPost("/cash/shifts/{id:guid}/close", async (Guid id, CloseShiftRequest req, ClaimsPrincipal user, CashService cash) =>
+app.MapPost("/cash/shifts/{id:guid}/close", async (Guid id, CloseShiftRequest req, ClaimsPrincipal user, AppDbContext db, CashService cash) =>
 {
     var uid = GetUserId(user);
     if (uid == Guid.Empty) return Results.Unauthorized();
 
     try
     {
+        if (IsCashier(user))
+        {
+            var cashierCashBoxId = await GetCashierCashBoxIdAsync(db, uid);
+            await EnsureCashierShiftAccessAsync(db, cashierCashBoxId, id);
+        }
+
         var shift = await cash.CloseShiftAsync(id, uid, req.ClosingBalanceDeclared);
         return Results.Ok(shift);
     }
@@ -204,17 +233,24 @@ app.MapPost("/cash/shifts/{id:guid}/close", async (Guid id, CloseShiftRequest re
     }
 }).RequireAuthorization();
 
-app.MapPost("/cash/operations", async (CreateCashOperationRequest req, ClaimsPrincipal user, CashService cash) =>
+app.MapPost("/cash/operations", async (CreateCashOperationRequest req, ClaimsPrincipal user, AppDbContext db, CashService cash) =>
 {
     var uid = GetUserId(user);
     if (uid == Guid.Empty) return Results.Unauthorized();
 
     try
     {
+        var cashBoxId = IsCashier(user)
+            ? await GetCashierCashBoxIdAsync(db, uid)
+            : req.CashBoxId;
+
+        // кассиру shiftId не даём — сервис сам подхватит открытую смену
+        var shiftId = IsCashier(user) ? null : req.ShiftId;
+
         var op = await cash.CreateOperationDraftAsync(
             userId: uid,
-            cashBoxId: req.CashBoxId,
-            shiftId: req.ShiftId,
+            cashBoxId: cashBoxId,
+            shiftId: shiftId,
             type: req.Type,
             amount: req.Amount,
             currencyCode: req.CurrencyCode,
@@ -266,11 +302,24 @@ app.MapPost("/cash/operations/{id:guid}/post-collection", async (Guid id, Claims
     }
 }).RequireAuthorization();
 
-app.MapGet("/cash/balance", async (Guid cashBoxId, ClaimsPrincipal user, CashService cash) =>
+app.MapGet("/cash/balance", async (Guid? cashBoxId, ClaimsPrincipal user, AppDbContext db, CashService cash) =>
 {
-    if (GetUserId(user) == Guid.Empty) return Results.Unauthorized();
-    var bal = await cash.GetCashBalanceBaseAsync(cashBoxId);
-    return Results.Ok(new { cashBoxId, balanceBase = bal });
+    var uid = GetUserId(user);
+    if (uid == Guid.Empty) return Results.Unauthorized();
+
+    try
+    {
+        var effectiveCashBoxId = IsCashier(user)
+            ? await GetCashierCashBoxIdAsync(db, uid)
+            : (cashBoxId ?? throw new InvalidOperationException("cashBoxId обязателен для этой роли."));
+
+        var bal = await cash.GetCashBalanceBaseAsync(effectiveCashBoxId);
+        return Results.Ok(new { cashBoxId = effectiveCashBoxId, balanceBase = bal });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 }).RequireAuthorization();
 
 app.Run();

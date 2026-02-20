@@ -31,14 +31,37 @@ public class AppDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<User>().HasIndex(x => x.Email).IsUnique();
+        // ---- Security ----
+        modelBuilder.Entity<User>()
+            .HasIndex(x => x.Email)
+            .IsUnique();
+
+        // User -> CashBox (1 user (cashier) = 1 cashbox) через FK
+        modelBuilder.Entity<User>()
+            .HasOne(u => u.CashBox)              // если у тебя нет навигации CashBox в User — см. примечание ниже
+            .WithMany()
+            .HasForeignKey(u => u.CashBoxId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // индекс на CashBoxId для быстрых проверок
+        modelBuilder.Entity<User>()
+            .HasIndex(u => u.CashBoxId);
+
+        // ✅ Опционально: запретить двум пользователям иметь одну и ту же кассу
+        // Работает хорошо, если CashBoxId назначается только кассирам.
+        modelBuilder.Entity<User>()
+            .HasIndex(u => u.CashBoxId)
+            .IsUnique()
+            .HasFilter("\"CashBoxId\" IS NOT NULL");
 
         modelBuilder.Entity<UserRole>().HasKey(x => new { x.UserId, x.RoleId });
         modelBuilder.Entity<RolePermission>().HasKey(x => new { x.RoleId, x.PermissionId });
 
+        // ---- Cash ----
         modelBuilder.Entity<CashShift>()
             .HasIndex(x => new { x.CashBoxId, x.Status });
 
+        // ---- Ledger ----
         // ✅ DB-level защита от двойного проведения:
         // один и тот же документ не может создать две одинаковые проводки
         modelBuilder.Entity<LedgerEntry>()
